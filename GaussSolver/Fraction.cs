@@ -139,7 +139,6 @@ namespace GaussSolver
             var sb = new StringBuilder(input.Length);
             foreach (char c in input)
             {
-                // تحويل الأرقام العربية (٠-٩) إلى أرقام إنجليزية (0-9) لو قرأها الـ OCR
                 if (c >= '\u0660' && c <= '\u0669')
                     sb.Append((char)('0' + (c - '\u0660')));
                 else if (c >= '\u06F0' && c <= '\u06F9')
