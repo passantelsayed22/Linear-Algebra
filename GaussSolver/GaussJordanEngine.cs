@@ -34,7 +34,7 @@ namespace GaussSolver
 
             public Matrix Calculate()
             {
-                Steps = new List<StepRecord>();
+                Steps.Clear();
 
                 Matrix matrix = originalMatrix.Clone();
 
@@ -42,10 +42,10 @@ namespace GaussSolver
 
                 // Record the initial matrix
                 Steps.Add(new StepRecord(
-                    stepNumber++,
-                    matrix,
-                    "Initial Matrix",
-                    "The original matrix."));
+                   stepNumber: stepNumber++,
+                    matrixSnapshot: matrix,
+                    operationText: "Initial Matrix",
+                    description: "The starting augmented matrix."));
 
                 int currentRow = 0;
 
@@ -73,14 +73,14 @@ namespace GaussSolver
                         matrix.SwapRows(pivotRow, currentRow);
 
                         Steps.Add(new StepRecord(
-                            stepNumber++,
-                            matrix,
-                            $"R{currentRow + 1} <-> R{pivotRow + 1}",
-                            "Swap rows to obtain a non-zero pivot.",
-                            currentRow,
-                            i,
-                            pivotRow,
-                            currentRow));
+                           stepNumber: stepNumber++,
+                            matrixSnapshot: matrix,
+                           operationText: $"R{currentRow + 1} <-> R{pivotRow + 1}",
+                            description: "Swap rows to obtain a non-zero pivot.",
+                            pivotRow: currentRow,
+                           pivotColumn: i,
+                           sourceRow: pivotRow,
+                           targetRow: currentRow));
                     }
 
                     // Make the pivot equal to 1
@@ -93,14 +93,14 @@ namespace GaussSolver
                         matrix.ScaleRow(currentRow, factor);
 
                         Steps.Add(new StepRecord(
-                            stepNumber++,
-                            matrix,
-                            $"R{currentRow + 1} = ({factor}) * R{currentRow + 1}",
-                            "Make the pivot equal to 1.",
-                            currentRow,
-                            i,
-                            currentRow,
-                            currentRow));
+                           stepNumber: stepNumber++,
+                           matrixSnapshot: matrix,
+                           operationText: $"R{currentRow + 1} = ({factor}) * R{currentRow + 1}",
+                           description: "Make the pivot equal to 1.",
+                           pivotRow: currentRow,
+                           pivotColumn: i,
+                            sourceRow: currentRow,
+                           targetRow: currentRow));
                     }
 
                     // Eliminate entries below the pivot
@@ -121,14 +121,14 @@ namespace GaussSolver
                             factor);
 
                         Steps.Add(new StepRecord(
-                            stepNumber++,
-                            matrix,
-                            $"R{j + 1} = R{j + 1} - ({value}) * R{currentRow + 1}",
-                            "Eliminate the entry below the pivot.",
-                            currentRow,
-                            i,
-                            currentRow,
-                            j));
+                            stepNumber: stepNumber++,
+                           matrixSnapshot:  matrix,
+                           operationText: $"R{j + 1} = R{j + 1} - ({value}) * R{currentRow + 1}",
+                           description: "Eliminate the entry below the pivot.",
+                            pivotRow: currentRow,
+                            pivotColumn: i,
+                           sourceRow: currentRow,
+                           targetRow: j));
                     }
 
                     currentRow++;
@@ -167,7 +167,7 @@ namespace GaussSolver
 
             public Matrix Calculate()
             {
-                Steps = new List<StepRecord>();
+                Steps.Clear();
 
                 // First calculate REF
                 REF refSolver = new REF(
@@ -203,14 +203,14 @@ namespace GaussSolver
                         matrix.ScaleRow(pivotRow, factor);
 
                         Steps.Add(new StepRecord(
-                            stepNumber++,
-                            matrix,
-                            $"R{pivotRow + 1} = ({factor}) * R{pivotRow + 1}",
-                            "Make the pivot equal to 1.",
-                            pivotRow,
-                            i,
-                            pivotRow,
-                            pivotRow));
+                           stepNumber: stepNumber++,
+                           matrixSnapshot: matrix,
+                           operationText: $"R{pivotRow + 1} = ({factor}) * R{pivotRow + 1}",
+                           description: "Make the pivot equal to 1.",
+                           pivotRow: pivotRow,
+                           pivotColumn: i,
+                           sourceRow: pivotRow,
+                           targetRow: pivotRow));
                     }
 
                     // Eliminate entries above the pivot
@@ -229,14 +229,14 @@ namespace GaussSolver
                             factor);
 
                         Steps.Add(new StepRecord(
-                            stepNumber++,
-                            matrix,
-                            $"R{j + 1} = R{j + 1} - ({value}) * R{pivotRow + 1}",
-                            "Eliminate the entry above the pivot.",
-                            pivotRow,
-                            i,
-                            pivotRow,
-                            j));
+                           stepNumber: stepNumber++,
+                           matrixSnapshot: matrix,
+                          operationText:  $"R{j + 1} = R{j + 1} - ({value}) * R{pivotRow + 1}",
+                           description: "Eliminate the entry above the pivot.",
+                           pivotRow: pivotRow,
+                           pivotColumn: i,
+                           sourceRow: pivotRow,
+                          targetRow: j));
                     }
 
                     pivotRow++;
