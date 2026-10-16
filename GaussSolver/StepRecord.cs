@@ -27,7 +27,7 @@ namespace GaussSolver
             int stepNumber,
             Matrix matrixSnapshot,
             string operationText,
-            string description,
+            string description = "",
             int pivotRow = -1,
             int pivotColumn = -1,
             int sourceRow = -1,
