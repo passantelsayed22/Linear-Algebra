@@ -5,7 +5,7 @@ namespace GaussSolver
 {
     public class GaussJordanEngine
     {
-        // =========================
+        
         // REF Class
         
         public class REF
