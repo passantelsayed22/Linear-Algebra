@@ -7,7 +7,7 @@ namespace GaussSolver
     {
         // =========================
         // REF Class
-        // =========================
+        
         public class REF
         {
             private readonly int rows;
