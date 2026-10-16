@@ -12,7 +12,7 @@ namespace GaussSolver
             out Matrix matrix,
             out string error)
         {
-            matrix = null;
+            matrix = null!;
             error = "";
 
             if (string.IsNullOrWhiteSpace(input))
@@ -96,7 +96,7 @@ namespace GaussSolver
             out string[] variableNames,
             out int failedEquationIndex)
         {
-            matrix = null;
+            matrix = null!;
             error = "";
             variableNames = Array.Empty<string>();
             failedEquationIndex = -1;
@@ -157,7 +157,7 @@ namespace GaussSolver
                 for (int c = 0; c < variableNames.Length; c++)
                 {
                     matrix[r, c] = parsedRows[r].TryGetValue(
-                        variableNames[c], out Fraction coefficient)
+                        variableNames[c], out Fraction? coefficient)
                         ? coefficient
                         : Fraction.Zero;
                 }
@@ -199,7 +199,7 @@ namespace GaussSolver
             alignedRowValues = new Fraction[expectedVariables.Length + 1];
             for (int c = 0; c < expectedVariables.Length; c++)
             {
-                alignedRowValues[c] = coeffMap.TryGetValue(expectedVariables[c], out Fraction val)
+                alignedRowValues[c] = coeffMap.TryGetValue(expectedVariables[c], out Fraction? val)
                     ? val
                     : Fraction.Zero;
             }
