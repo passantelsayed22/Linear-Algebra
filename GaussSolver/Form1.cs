@@ -24,6 +24,7 @@ namespace GaussSolver
         private Button btnSolve;
         private Button btnSample;
         private Button btnClear;
+        private Button btnImport;
         private Button btnFirst;
         private Button btnPrev;
         private Button btnNext;
@@ -53,7 +54,7 @@ namespace GaussSolver
             Panel topPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 260,
+                Height = 265,
                 Padding = new Padding(12),
                 BackColor = Color.White
             };
@@ -70,14 +71,14 @@ namespace GaussSolver
             {
                 Text = "Elimination Method",
                 Dock = DockStyle.Top,
-                Height = 95,
+                Height = 88,
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Bold)
             };
 
             rbREF = new RadioButton
             {
                 Text = "Gaussian (REF)",
-                Location = new Point(15, 28),
+                Location = new Point(15, 26),
                 AutoSize = true,
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Regular)
             };
@@ -85,7 +86,7 @@ namespace GaussSolver
             rbRREF = new RadioButton
             {
                 Text = "Gauss-Jordan (RREF)",
-                Location = new Point(15, 58),
+                Location = new Point(15, 54),
                 AutoSize = true,
                 Checked = true,
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Regular)
@@ -97,12 +98,12 @@ namespace GaussSolver
             btnSolve = new Button
             {
                 Text = "Solve",
-                Location = new Point(10, 110),
-                Size = new Size(290, 44),
+                Location = new Point(10, 96),
+                Size = new Size(290, 42),
                 BackColor = Color.FromArgb(37, 99, 235),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+                Font = new Font("Segoe UI", 10.5F, FontStyle.Bold),
                 Cursor = Cursors.Hand
             };
             btnSolve.FlatAppearance.BorderSize = 0;
@@ -111,8 +112,8 @@ namespace GaussSolver
             btnSample = new Button
             {
                 Text = "Example",
-                Location = new Point(10, 164),
-                Size = new Size(140, 40),
+                Location = new Point(10, 146),
+                Size = new Size(140, 38),
                 BackColor = Color.FromArgb(226, 232, 240),
                 ForeColor = Color.FromArgb(30, 41, 59),
                 FlatStyle = FlatStyle.Flat,
@@ -125,8 +126,8 @@ namespace GaussSolver
             btnClear = new Button
             {
                 Text = "Clear",
-                Location = new Point(160, 164),
-                Size = new Size(140, 40),
+                Location = new Point(160, 146),
+                Size = new Size(140, 38),
                 BackColor = Color.FromArgb(254, 226, 226),
                 ForeColor = Color.FromArgb(185, 28, 28),
                 FlatStyle = FlatStyle.Flat,
@@ -136,10 +137,25 @@ namespace GaussSolver
             btnClear.FlatAppearance.BorderSize = 0;
             btnClear.Click += btnClear_Click;
 
+            btnImport = new Button
+            {
+                Text = "Import File / Image (OCR & PDF)",
+                Location = new Point(10, 192),
+                Size = new Size(290, 40),
+                BackColor = Color.FromArgb(237, 233, 254),
+                ForeColor = Color.FromArgb(91, 33, 182),
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
+                Cursor = Cursors.Hand
+            };
+            btnImport.FlatAppearance.BorderSize = 0;
+            btnImport.Click += btnImport_Click;
+
             rightControlPanel.Controls.Add(grpMethod);
             rightControlPanel.Controls.Add(btnSolve);
             rightControlPanel.Controls.Add(btnSample);
             rightControlPanel.Controls.Add(btnClear);
+            rightControlPanel.Controls.Add(btnImport);
 
             tabInputMode = new TabControl
             {
@@ -290,7 +306,7 @@ namespace GaussSolver
 
             lblDescription = new Label
             {
-                Text = "Choose Grid Cells or Equations tab above, enter your system, and click Solve.",
+                Text = "Choose Grid Cells, Equations tab, or Import File / Image to start.",
                 Location = new Point(15, 38),
                 AutoSize = true,
                 Font = new Font("Segoe UI", 10F, FontStyle.Regular),
@@ -441,6 +457,31 @@ namespace GaussSolver
             }
         }
 
+        private void PopulateGridFromMatrix(Matrix m)
+        {
+            int rCount = Math.Min(10, Math.Max(1, m.Rows));
+            int vCount = Math.Min(10, Math.Max(1, m.Columns - 1));
+
+            nudRows.ValueChanged -= Dimensions_ValueChanged;
+            nudCols.ValueChanged -= Dimensions_ValueChanged;
+
+            nudRows.Value = rCount;
+            nudCols.Value = vCount;
+
+            nudRows.ValueChanged += Dimensions_ValueChanged;
+            nudCols.ValueChanged += Dimensions_ValueChanged;
+
+            BuildInputGrid(rCount, vCount);
+
+            for (int r = 0; r < rCount; r++)
+            {
+                for (int c = 0; c < m.Columns && c < dgvInput.Columns.Count; c++)
+                {
+                    dgvInput.Rows[r].Cells[c].Value = m[r, c].ToString();
+                }
+            }
+        }
+
         private bool TryReadGridInput(out Matrix matrix, out string error)
         {
             _variableNames = null;
@@ -487,6 +528,46 @@ namespace GaussSolver
 
             error = !string.IsNullOrWhiteSpace(eqError) ? eqError : matrixError;
             return false;
+        }
+
+        private void btnImport_Click(object sender, EventArgs e)
+        {
+            using (OpenFileDialog ofd = new OpenFileDialog())
+            {
+                ofd.Title = "Import Equations or Matrix from File / Image";
+                ofd.Filter = "All Supported Files (*.txt;*.csv;*.pdf;*.png;*.jpg;*.jpeg;*.bmp)|*.txt;*.csv;*.pdf;*.png;*.jpg;*.jpeg;*.bmp|Text & PDF Files (*.txt;*.csv;*.pdf)|*.txt;*.csv;*.pdf|Image Files (*.png;*.jpg;*.jpeg;*.bmp)|*.png;*.jpg;*.jpeg;*.bmp";
+
+                if (ofd.ShowDialog() == DialogResult.OK)
+                {
+                    this.Cursor = Cursors.WaitCursor;
+                    try
+                    {
+                        if (!InputParser.TryExtractTextFromFile(ofd.FileName, out string extractedText, out string extractError))
+                        {
+                            MessageBox.Show(extractError, "Import Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            return;
+                        }
+
+                        txtInput.Text = extractedText;
+                        tabInputMode.SelectedTab = tabText;
+
+                        if (TryParseTextInput(extractedText, out Matrix parsedMatrix, out _))
+                        {
+                            PopulateGridFromMatrix(parsedMatrix);
+                            btnSolve_Click(sender, e);
+                        }
+                        else
+                        {
+                            MessageBox.Show("Text extracted! Please review the extracted equations in the text box and click Solve.",
+                                "Text Extracted", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                    }
+                    finally
+                    {
+                        this.Cursor = Cursors.Default;
+                    }
+                }
+            }
         }
 
         private void btnSolve_Click(object sender, EventArgs e)
@@ -705,7 +786,7 @@ namespace GaussSolver
 
             lblStepCount.Text = "Step 0 of 0";
             lblOperation.Text = "Operation: -";
-            lblDescription.Text = "Choose Grid Cells or Equations tab above, enter your system, and click Solve.";
+            lblDescription.Text = "Choose Grid Cells, Equations tab, or Import File / Image to start.";
             lblFinalResult.Text = "Final Solution: -";
 
             btnFirst.Enabled = false;

@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace GaussSolver
@@ -12,7 +16,7 @@ namespace GaussSolver
             out Matrix matrix,
             out string error)
         {
-            matrix = null!;
+            matrix = null;
             error = "";
 
             if (string.IsNullOrWhiteSpace(input))
@@ -96,7 +100,7 @@ namespace GaussSolver
             out string[] variableNames,
             out int failedEquationIndex)
         {
-            matrix = null!;
+            matrix = null;
             error = "";
             variableNames = Array.Empty<string>();
             failedEquationIndex = -1;
@@ -157,7 +161,7 @@ namespace GaussSolver
                 for (int c = 0; c < variableNames.Length; c++)
                 {
                     matrix[r, c] = parsedRows[r].TryGetValue(
-                        variableNames[c], out Fraction? coefficient)
+                        variableNames[c], out Fraction coefficient)
                         ? coefficient
                         : Fraction.Zero;
                 }
@@ -199,7 +203,7 @@ namespace GaussSolver
             alignedRowValues = new Fraction[expectedVariables.Length + 1];
             for (int c = 0; c < expectedVariables.Length; c++)
             {
-                alignedRowValues[c] = coeffMap.TryGetValue(expectedVariables[c], out Fraction? val)
+                alignedRowValues[c] = coeffMap.TryGetValue(expectedVariables[c], out Fraction val)
                     ? val
                     : Fraction.Zero;
             }
@@ -335,6 +339,201 @@ namespace GaussSolver
             rowValues[rowValues.Length - 1] = constant;
 
             return true;
+        }
+
+        public static bool TryExtractTextFromFile(string filePath, out string extractedText, out string error)
+        {
+            extractedText = "";
+            error = "";
+
+            if (!File.Exists(filePath))
+            {
+                error = "File does not exist.";
+                return false;
+            }
+
+            string ext = Path.GetExtension(filePath).ToLowerInvariant();
+
+            try
+            {
+                if (ext == ".txt" || ext == ".csv")
+                {
+                    extractedText = File.ReadAllText(filePath, Encoding.UTF8).Trim();
+                    return !string.IsNullOrWhiteSpace(extractedText);
+                }
+                else if (ext == ".pdf")
+                {
+                    extractedText = ExtractTextFromPdf(filePath);
+                    if (string.IsNullOrWhiteSpace(extractedText))
+                    {
+                        error = "Could not extract readable text from this PDF.";
+                        return false;
+                    }
+                    return true;
+                }
+                else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp")
+                {
+                    extractedText = ExtractTextFromImageWindowsOcr(filePath);
+                    if (string.IsNullOrWhiteSpace(extractedText))
+                    {
+                        error = "No readable text or equations were detected in the image.";
+                        return false;
+                    }
+                    return true;
+                }
+                else
+                {
+                    error = "Unsupported file format.";
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                error = $"Failed to read file: {ex.Message}";
+                return false;
+            }
+        }
+
+        private static string ExtractTextFromPdf(string pdfPath)
+        {
+            byte[] bytes = File.ReadAllBytes(pdfPath);
+            string raw = Encoding.GetEncoding("ISO-8859-1").GetString(bytes);
+            StringBuilder fullText = new StringBuilder();
+
+            MatchCollection streamMatches = Regex.Matches(raw, @"stream[\r\n]+(.*?)[\r\n]+endstream", RegexOptions.Singleline);
+            foreach (Match m in streamMatches)
+            {
+                string streamData = m.Groups[1].Value;
+                string decoded = TryDecompressPdfStream(streamData);
+                string source = !string.IsNullOrEmpty(decoded) ? decoded : streamData;
+
+                MatchCollection textBlocks = Regex.Matches(source, @"\(([^()]+)\)\s*Tj|\[(.*?)\]\s*TJ", RegexOptions.Singleline);
+                if (textBlocks.Count > 0)
+                {
+                    StringBuilder lineBuilder = new StringBuilder();
+                    foreach (Match tb in textBlocks)
+                    {
+                        if (tb.Groups[1].Success)
+                        {
+                            lineBuilder.Append(tb.Groups[1].Value);
+                        }
+                        else if (tb.Groups[2].Success)
+                        {
+                            MatchCollection subParts = Regex.Matches(tb.Groups[2].Value, @"\(([^()]*)\)");
+                            foreach (Match sp in subParts)
+                                lineBuilder.Append(sp.Groups[1].Value);
+                        }
+                    }
+                    fullText.AppendLine(lineBuilder.ToString());
+                }
+            }
+
+            string result = fullText.ToString().Trim();
+            if (string.IsNullOrWhiteSpace(result))
+            {
+                MatchCollection directMatches = Regex.Matches(raw, @"\(([^()]+)\)\s*Tj");
+                foreach (Match dm in directMatches)
+                    fullText.AppendLine(dm.Groups[1].Value);
+                result = fullText.ToString().Trim();
+            }
+
+            return SanitizeOcrText(result);
+        }
+
+        private static string TryDecompressPdfStream(string latin1Stream)
+        {
+            try
+            {
+                byte[] data = Encoding.GetEncoding("ISO-8859-1").GetBytes(latin1Stream);
+                if (data.Length <= 2) return "";
+                using (MemoryStream ms = new MemoryStream(data, 2, data.Length - 2))
+                using (DeflateStream ds = new DeflateStream(ms, CompressionMode.Decompress))
+                using (StreamReader sr = new StreamReader(ds, Encoding.UTF8))
+                {
+                    return sr.ReadToEnd();
+                }
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private static string ExtractTextFromImageWindowsOcr(string imagePath)
+        {
+            string escapedPath = imagePath.Replace("'", "''");
+            string psScript = $@"
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime]
+$null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime]
+$null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType=WindowsRuntime]
+
+$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {{ $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' }})[0]
+Function Await($WinRtTask, $ResultType) {{
+    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+    $netTask = $asTask.Invoke($null, @($WinRtTask))
+    $netTask.Wait(-1) | Out-Null
+    $netTask.Result
+}}
+
+$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync('{escapedPath}')) ([Windows.Storage.StorageFile])
+$stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+$bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+if ($null -eq $engine) {{
+    $lang = New-Object Windows.Globalization.Language('en-US')
+    $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($lang)
+}}
+$result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+foreach ($line in $result.Lines) {{
+    Write-Output $line.Text
+}}
+";
+            string base64Script = Convert.ToBase64String(Encoding.Unicode.GetBytes(psScript));
+
+            ProcessStartInfo psi = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {base64Script}",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8
+            };
+
+            using (Process proc = Process.Start(psi))
+            {
+                string output = proc.StandardOutput.ReadToEnd();
+                proc.WaitForExit(15000);
+                return SanitizeOcrText(output);
+            }
+        }
+
+        public static string SanitizeOcrText(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return "";
+
+            string cleaned = raw
+                .Replace('\u2212', '-')
+                .Replace('\u2013', '-')
+                .Replace('\u2014', '-')
+                .Replace('×', '*');
+
+            string[] lines = cleaned.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            List<string> validLines = new List<string>();
+
+            foreach (string line in lines)
+            {
+                string trimmed = line.Trim();
+                if (!string.IsNullOrWhiteSpace(trimmed))
+                    validLines.Add(trimmed);
+            }
+
+            return string.Join(Environment.NewLine, validLines);
         }
     }
 }
