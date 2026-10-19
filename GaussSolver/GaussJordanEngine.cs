@@ -5,245 +5,216 @@ namespace GaussSolver
 {
     public class GaussJordanEngine
     {
-        
-        // REF Class
-        
         public class REF
         {
-            private readonly int rows;
-            private readonly int cols;
-            private readonly Matrix originalMatrix;
+            private int rows;
+            private int cols;
+            private Matrix matrix;
 
             public List<StepRecord> Steps { get; private set; }
 
-            public REF(int r, int c, Matrix m)
+            public REF(int rows, int cols, Matrix inputMatrix)
             {
-                if (m == null)
-                    throw new ArgumentNullException(nameof(m));
-
-                if (m.Rows != r || m.Columns != c)
-                    throw new ArgumentException(
-                        "Invalid matrix dimensions.");
-
-                rows = r;
-                cols = c;
-
-                originalMatrix = m.Clone();
-                Steps = new List<StepRecord>();
+                this.rows = rows;
+                this.cols = cols;
+                this.matrix = inputMatrix.Clone();
+                this.Steps = new List<StepRecord>();
             }
 
             public Matrix Calculate()
             {
                 Steps.Clear();
-
-                Matrix matrix = originalMatrix.Clone();
-
                 int stepNumber = 1;
 
-                // Record the initial matrix
                 Steps.Add(new StepRecord(
-                   stepNumber: stepNumber++,
-                    matrixSnapshot: matrix,
-                    operationText: "Initial Matrix",
-                    description: "The starting augmented matrix."));
+                    stepNumber++,
+                    matrix.Clone(),
+                    "Initial Matrix",
+                    "Start with the initial augmented matrix.",
+                    -1, -1, -1, -1
+                ));
 
-                int currentRow = 0;
-
-                // Find pivots column by column
-                for (int i = 0;
-                     i < cols && currentRow < rows;
-                     i++)
-                {
-                    int pivotRow = currentRow;
-
-                    // Find a non-zero pivot
-                    while (pivotRow < rows &&
-                           matrix[pivotRow, i].IsZero)
-                    {
-                        pivotRow++;
-                    }
-
-                    // No pivot in this column
-                    if (pivotRow == rows)
-                        continue;
-
-                    // Swap rows if necessary
-                    if (pivotRow != currentRow)
-                    {
-                        matrix.SwapRows(pivotRow, currentRow);
-
-                        Steps.Add(new StepRecord(
-                           stepNumber: stepNumber++,
-                            matrixSnapshot: matrix,
-                           operationText: $"R{currentRow + 1} <-> R{pivotRow + 1}",
-                            description: "Swap rows to obtain a non-zero pivot.",
-                            pivotRow: currentRow,
-                           pivotColumn: i,
-                           sourceRow: pivotRow,
-                           targetRow: currentRow));
-                    }
-
-                    // Make the pivot equal to 1
-                    Fraction pivot = matrix[currentRow, i];
-
-                    if (!pivot.IsOne)
-                    {
-                        Fraction factor = Fraction.One / pivot;
-
-                        matrix.ScaleRow(currentRow, factor);
-
-                        Steps.Add(new StepRecord(
-                           stepNumber: stepNumber++,
-                           matrixSnapshot: matrix,
-                           operationText: $"R{currentRow + 1} = ({factor}) * R{currentRow + 1}",
-                           description: "Make the pivot equal to 1.",
-                           pivotRow: currentRow,
-                           pivotColumn: i,
-                            sourceRow: currentRow,
-                           targetRow: currentRow));
-                    }
-
-                    // Eliminate entries below the pivot
-                    for (int j = currentRow + 1;
-                         j < rows;
-                         j++)
-                    {
-                        Fraction value = matrix[j, i];
-
-                        if (value.IsZero)
-                            continue;
-
-                        Fraction factor = -value;
-
-                        matrix.AddMultipleOfRow(
-                            j,
-                            currentRow,
-                            factor);
-
-                        Steps.Add(new StepRecord(
-                            stepNumber: stepNumber++,
-                           matrixSnapshot:  matrix,
-                           operationText: $"R{j + 1} = R{j + 1} - ({value}) * R{currentRow + 1}",
-                           description: "Eliminate the entry below the pivot.",
-                            pivotRow: currentRow,
-                            pivotColumn: i,
-                           sourceRow: currentRow,
-                           targetRow: j));
-                    }
-
-                    currentRow++;
-                }
-
-                return matrix.Clone();
-            }
-        }
-
-        // =========================
-        // RREF Class
-        // =========================
-        public class RREF
-        {
-            private readonly int rows;
-            private readonly int cols;
-            private readonly Matrix originalMatrix;
-
-            public List<StepRecord> Steps { get; private set; }
-
-            public RREF(int r, int c, Matrix m)
-            {
-                if (m == null)
-                    throw new ArgumentNullException(nameof(m));
-
-                if (m.Rows != r || m.Columns != c)
-                    throw new ArgumentException(
-                        "Invalid matrix dimensions.");
-
-                rows = r;
-                cols = c;
-
-                originalMatrix = m.Clone();
-                Steps = new List<StepRecord>();
-            }
-
-            public Matrix Calculate()
-            {
-                Steps.Clear();
-
-                // First calculate REF
-                REF refSolver = new REF(
-                    rows,
-                    cols,
-                    originalMatrix);
-
-                Matrix matrix = refSolver.Calculate();
-
-                // Copy all REF steps
-                Steps.AddRange(refSolver.Steps);
-
-                int stepNumber = Steps.Count + 1;
-
-                // Eliminate entries above each pivot
                 int pivotRow = 0;
 
-                for (int i = 0;
-                     i < cols && pivotRow < rows;
-                     i++)
+                for (int col = 0; col < cols - 1 && pivotRow < rows; col++)
                 {
-                    // Skip columns without a pivot
-                    if (matrix[pivotRow, i].IsZero)
-                        continue;
-
-                    Fraction pivot = matrix[pivotRow, i];
-
-                    // Ensure that the pivot equals 1
-                    if (!pivot.IsOne)
+                    int nonZeroRow = -1;
+                    for (int r = pivotRow; r < rows; r++)
                     {
-                        Fraction factor = Fraction.One / pivot;
-
-                        matrix.ScaleRow(pivotRow, factor);
-
-                        Steps.Add(new StepRecord(
-                           stepNumber: stepNumber++,
-                           matrixSnapshot: matrix,
-                           operationText: $"R{pivotRow + 1} = ({factor}) * R{pivotRow + 1}",
-                           description: "Make the pivot equal to 1.",
-                           pivotRow: pivotRow,
-                           pivotColumn: i,
-                           sourceRow: pivotRow,
-                           targetRow: pivotRow));
+                        if (!matrix[r, col].IsZero)
+                        {
+                            nonZeroRow = r;
+                            break;
+                        }
                     }
 
-                    // Eliminate entries above the pivot
-                    for (int j = 0; j < pivotRow; j++)
+                    if (nonZeroRow == -1)
+                        continue;
+
+                    if (nonZeroRow != pivotRow)
                     {
-                        Fraction value = matrix[j, i];
-
-                        if (value.IsZero)
-                            continue;
-
-                        Fraction factor = -value;
-
-                        matrix.AddMultipleOfRow(
-                            j,
-                            pivotRow,
-                            factor);
-
+                        matrix.SwapRows(pivotRow, nonZeroRow);
                         Steps.Add(new StepRecord(
-                           stepNumber: stepNumber++,
-                           matrixSnapshot: matrix,
-                          operationText:  $"R{j + 1} = R{j + 1} - ({value}) * R{pivotRow + 1}",
-                           description: "Eliminate the entry above the pivot.",
-                           pivotRow: pivotRow,
-                           pivotColumn: i,
-                           sourceRow: pivotRow,
-                          targetRow: j));
+                            stepNumber++,
+                            matrix.Clone(),
+                            $"R{pivotRow + 1} <-> R{nonZeroRow + 1}",
+                            $"Swap Row {pivotRow + 1} with Row {nonZeroRow + 1} to bring a non-zero pivot to position ({pivotRow + 1}, {col + 1}).",
+                            pivotRow, col, pivotRow, nonZeroRow
+                        ));
+                    }
+
+                    Fraction pivotValue = matrix[pivotRow, col];
+                    if (pivotValue != Fraction.One)
+                    {
+                        Fraction scaleFactor = pivotValue.Reciprocal();
+                        matrix.ScaleRow(pivotRow, scaleFactor);
+                        Steps.Add(new StepRecord(
+                            stepNumber++,
+                            matrix.Clone(),
+                            $"R{pivotRow + 1} = ({scaleFactor}) * R{pivotRow + 1}",
+                            $"Scale Row {pivotRow + 1} by {scaleFactor} to make the pivot equal to 1.",
+                            pivotRow, col, pivotRow, pivotRow
+                        ));
+                    }
+
+                    for (int r = pivotRow + 1; r < rows; r++)
+                    {
+                        Fraction factor = matrix[r, col];
+                        if (!factor.IsZero)
+                        {
+                            Fraction multiplier = -factor;
+                            matrix.AddMultipleOfRow(r, pivotRow, multiplier);
+                            Steps.Add(new StepRecord(
+                                stepNumber++,
+                                matrix.Clone(),
+                                $"R{r + 1} = R{r + 1} + ({multiplier}) * R{pivotRow + 1}",
+                                $"Eliminate the entry in Row {r + 1}, Column {col + 1} using Row {pivotRow + 1}.",
+                                pivotRow, col, r, pivotRow
+                            ));
+                        }
                     }
 
                     pivotRow++;
                 }
 
-                return matrix.Clone();
+                return matrix;
             }
+        }
+
+        public class RREF
+        {
+            private int rows;
+            private int cols;
+            private Matrix matrix;
+
+            public List<StepRecord> Steps { get; private set; }
+
+            public RREF(int rows, int cols, Matrix inputMatrix)
+            {
+                this.rows = rows;
+                this.cols = cols;
+                this.matrix = inputMatrix.Clone();
+                this.Steps = new List<StepRecord>();
+            }
+
+            public Matrix Calculate()
+            {
+                REF refSolver = new REF(rows, cols, matrix);
+                matrix = refSolver.Calculate();
+                Steps = new List<StepRecord>(refSolver.Steps);
+
+                int stepNumber = Steps.Count + 1;
+
+                for (int r = rows - 1; r >= 0; r--)
+                {
+                    int pivotCol = -1;
+                    for (int c = 0; c < cols - 1; c++)
+                    {
+                        if (!matrix[r, c].IsZero)
+                        {
+                            pivotCol = c;
+                            break;
+                        }
+                    }
+
+                    if (pivotCol == -1)
+                        continue;
+
+                    for (int aboveRow = r - 1; aboveRow >= 0; aboveRow--)
+                    {
+                        Fraction factor = matrix[aboveRow, pivotCol];
+                        if (!factor.IsZero)
+                        {
+                            Fraction multiplier = -factor;
+                            matrix.AddMultipleOfRow(aboveRow, r, multiplier);
+                            Steps.Add(new StepRecord(
+                                stepNumber++,
+                                matrix.Clone(),
+                                $"R{aboveRow + 1} = R{aboveRow + 1} + ({multiplier}) * R{r + 1}",
+                                $"Eliminate the entry above the pivot in Row {aboveRow + 1}, Column {pivotCol + 1}.",
+                                r, pivotCol, aboveRow, r
+                            ));
+                        }
+                    }
+                }
+
+                return matrix;
+            }
+        }
+
+        public static string GetSolutionSummary(Matrix finalMatrix)
+        {
+            int rows = finalMatrix.Rows;
+            int cols = finalMatrix.Columns;
+            int numVars = cols - 1;
+            int rank = 0;
+
+            for (int r = 0; r < rows; r++)
+            {
+                bool allCoeffsZero = true;
+                for (int c = 0; c < numVars; c++)
+                {
+                    if (!finalMatrix[r, c].IsZero)
+                    {
+                        allCoeffsZero = false;
+                        break;
+                    }
+                }
+
+                if (allCoeffsZero && !finalMatrix[r, numVars].IsZero)
+                {
+                    return "No Solution (Inconsistent System)";
+                }
+
+                if (!allCoeffsZero)
+                {
+                    rank++;
+                }
+            }
+
+            if (rank < numVars)
+            {
+                return $"Infinite Solutions ({numVars - rank} Free Variable(s))";
+            }
+
+            Fraction[] solutions = new Fraction[numVars];
+            for (int i = numVars - 1; i >= 0; i--)
+            {
+                Fraction sum = finalMatrix[i, numVars];
+                for (int j = i + 1; j < numVars; j++)
+                {
+                    sum = sum - (finalMatrix[i, j] * solutions[j]);
+                }
+                solutions[i] = sum / finalMatrix[i, i];
+            }
+
+            List<string> results = new List<string>();
+            for (int i = 0; i < numVars; i++)
+            {
+                results.Add($"x{i + 1} = {solutions[i]}");
+            }
+
+            return "Unique Solution:  " + string.Join(" ,  ", results);
         }
     }
 }
