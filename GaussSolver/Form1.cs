@@ -34,6 +34,7 @@ namespace GaussSolver
         private Label lblDescription;
         private Label lblFinalResult;
         private DataGridView dgvMatrix;
+        //--------------
 
         public Form1()
         {
