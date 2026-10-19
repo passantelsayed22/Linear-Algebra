@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -394,6 +397,147 @@ namespace GaussSolver
             }
         }
 
+        private static string PreprocessImageForOcr(string originalPath)
+        {
+            using (Bitmap src = new Bitmap(originalPath))
+            {
+                int scale = 3;
+                int pad = 40;
+                int newW = src.Width * scale + pad * 2;
+                int newH = src.Height * scale + pad * 2;
+
+                long totalBrightness = 0;
+                int sampleCount = 0;
+                for (int y = 0; y < src.Height; y += Math.Max(1, src.Height / 20))
+                {
+                    for (int x = 0; x < src.Width; x += Math.Max(1, src.Width / 20))
+                    {
+                        Color c = src.GetPixel(x, y);
+                        totalBrightness += (c.R + c.G + c.B) / 3;
+                        sampleCount++;
+                    }
+                }
+                bool isDarkBackground = (sampleCount > 0) && ((totalBrightness / sampleCount) < 128);
+
+                using (Bitmap scaled = new Bitmap(newW, newH, PixelFormat.Format24bppRgb))
+                {
+                    using (Graphics g = Graphics.FromImage(scaled))
+                    {
+                        g.Clear(Color.White);
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.SmoothingMode = SmoothingMode.HighQuality;
+
+                        if (isDarkBackground)
+                        {
+                            using (Bitmap inverted = new Bitmap(src.Width, src.Height))
+                            {
+                                for (int y = 0; y < src.Height; y++)
+                                {
+                                    for (int x = 0; x < src.Width; x++)
+                                    {
+                                        Color p = src.GetPixel(x, y);
+                                        int lum = (int)(p.R * 0.3 + p.G * 0.59 + p.B * 0.11);
+                                        int inv = 255 - lum;
+                                        int bw = inv < 150 ? 0 : 255;
+                                        inverted.SetPixel(x, y, Color.FromArgb(bw, bw, bw));
+                                    }
+                                }
+                                g.DrawImage(inverted, new Rectangle(pad, pad, src.Width * scale, src.Height * scale));
+                            }
+                        }
+                        else
+                        {
+                            using (Bitmap highContrast = new Bitmap(src.Width, src.Height))
+                            {
+                                for (int y = 0; y < src.Height; y++)
+                                {
+                                    for (int x = 0; x < src.Width; x++)
+                                    {
+                                        Color p = src.GetPixel(x, y);
+                                        int lum = (int)(p.R * 0.3 + p.G * 0.59 + p.B * 0.11);
+                                        int bw = lum < 165 ? 0 : 255;
+                                        highContrast.SetPixel(x, y, Color.FromArgb(bw, bw, bw));
+                                    }
+                                }
+                                g.DrawImage(highContrast, new Rectangle(pad, pad, src.Width * scale, src.Height * scale));
+                            }
+                        }
+                    }
+
+                    string tempPath = Path.Combine(Path.GetTempPath(), "gauss_ocr_" + Guid.NewGuid().ToString("N") + ".png");
+                    scaled.Save(tempPath, ImageFormat.Png);
+                    return tempPath;
+                }
+            }
+        }
+
+        private static string ExtractTextFromImageWindowsOcr(string imagePath)
+        {
+            string processedPath = PreprocessImageForOcr(imagePath);
+            try
+            {
+                string escapedPath = processedPath.Replace("'", "''");
+                string psScript = $@"
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime]
+$null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime]
+$null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType=WindowsRuntime]
+$null = [Windows.Globalization.Language, Windows.Foundation, ContentType=WindowsRuntime]
+
+$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {{ $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' }})[0]
+Function Await($WinRtTask, $ResultType) {{
+    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+    $netTask = $asTask.Invoke($null, @($WinRtTask))
+    $netTask.Wait(-1) | Out-Null
+    $netTask.Result
+}}
+
+$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync('{escapedPath}')) ([Windows.Storage.StorageFile])
+$stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+$bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+
+$lang = New-Object Windows.Globalization.Language('en-US')
+$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($lang)
+if ($null -eq $engine) {{
+    $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+}}
+$result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+foreach ($line in $result.Lines) {{
+    $words = ($line.Words | Sort-Object {{ $_.BoundingRect.X }} | ForEach-Object {{ $_.Text }}) -join ' '
+    Write-Output $words
+}}
+";
+                string base64Script = Convert.ToBase64String(Encoding.Unicode.GetBytes(psScript));
+
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = "powershell.exe",
+                    Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {base64Script}",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = Encoding.UTF8
+                };
+
+                using (Process proc = Process.Start(psi))
+                {
+                    string output = proc.StandardOutput.ReadToEnd();
+                    proc.WaitForExit(15000);
+                    return SanitizeOcrText(output);
+                }
+            }
+            finally
+            {
+                if (File.Exists(processedPath))
+                {
+                    try { File.Delete(processedPath); } catch { }
+                }
+            }
+        }
+
         private static string ExtractTextFromPdf(string pdfPath)
         {
             byte[] bytes = File.ReadAllBytes(pdfPath);
@@ -459,59 +603,6 @@ namespace GaussSolver
             }
         }
 
-        private static string ExtractTextFromImageWindowsOcr(string imagePath)
-        {
-            string escapedPath = imagePath.Replace("'", "''");
-            string psScript = $@"
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Runtime.WindowsRuntime
-$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime]
-$null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime]
-$null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType=WindowsRuntime]
-
-$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {{ $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' }})[0]
-Function Await($WinRtTask, $ResultType) {{
-    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
-    $netTask = $asTask.Invoke($null, @($WinRtTask))
-    $netTask.Wait(-1) | Out-Null
-    $netTask.Result
-}}
-
-$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync('{escapedPath}')) ([Windows.Storage.StorageFile])
-$stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
-$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
-$bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
-$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-if ($null -eq $engine) {{
-    $lang = New-Object Windows.Globalization.Language('en-US')
-    $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($lang)
-}}
-$result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
-foreach ($line in $result.Lines) {{
-    Write-Output $line.Text
-}}
-";
-            string base64Script = Convert.ToBase64String(Encoding.Unicode.GetBytes(psScript));
-
-            ProcessStartInfo psi = new ProcessStartInfo
-            {
-                FileName = "powershell.exe",
-                Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {base64Script}",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                StandardOutputEncoding = Encoding.UTF8
-            };
-
-            using (Process proc = Process.Start(psi))
-            {
-                string output = proc.StandardOutput.ReadToEnd();
-                proc.WaitForExit(15000);
-                return SanitizeOcrText(output);
-            }
-        }
-
         public static string SanitizeOcrText(string raw)
         {
             if (string.IsNullOrWhiteSpace(raw))
@@ -521,6 +612,7 @@ foreach ($line in $result.Lines) {{
                 .Replace('\u2212', '-')
                 .Replace('\u2013', '-')
                 .Replace('\u2014', '-')
+                .Replace('~', '-')
                 .Replace('×', '*');
 
             string[] lines = cleaned.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
@@ -529,8 +621,15 @@ foreach ($line in $result.Lines) {{
             foreach (string line in lines)
             {
                 string trimmed = line.Trim();
-                if (!string.IsNullOrWhiteSpace(trimmed))
-                    validLines.Add(trimmed);
+                if (string.IsNullOrWhiteSpace(trimmed))
+                    continue;
+
+                if (!trimmed.Contains("=") && (trimmed.Contains(":") || trimmed.Contains("?")))
+                {
+                    trimmed = Regex.Replace(trimmed, @"[\?:]+", "=");
+                }
+
+                validLines.Add(trimmed);
             }
 
             return string.Join(Environment.NewLine, validLines);
