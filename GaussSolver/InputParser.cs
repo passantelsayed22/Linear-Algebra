@@ -271,7 +271,6 @@ namespace GaussSolver
             var coefficients = new Dictionary<string, Fraction>(
                 StringComparer.OrdinalIgnoreCase);
 
-            // يدعم: 2x, 3/4 x, x/2, 3x/4, -y/3
             string pattern =
                 @"(?<sign>[+-]?)\s*(?<coef>(?:\d+\s*/\s*\d+|\d+(?:\.\d+)?|\.\d+)?)\s*\*?\s*(?<var>[a-zA-Z]\w*)(?:\s*/\s*(?<denom>\d+(?:\.\d+)?|\.\d+))?";
 
@@ -411,78 +410,166 @@ namespace GaussSolver
             }
         }
 
-        private static string PreprocessImageForOcr(string originalPath)
+        private static List<string> CreateOcrLineSlices(string originalPath)
         {
+            List<string> tempFiles = new List<string>();
+
             using (Bitmap src = new Bitmap(originalPath))
             {
-                int scale = 3;
-                int pad = 48;
-                int scaledW = src.Width * scale;
-                int scaledH = src.Height * scale;
-                int newW = scaledW + pad * 2;
-                int newH = scaledH + pad * 2;
+                int w = src.Width;
+                int h = src.Height;
+                int[,] lum = new int[w, h];
 
                 long totalBrightness = 0;
                 int sampleCount = 0;
-                for (int y = 0; y < src.Height; y += Math.Max(1, src.Height / 20))
+
+                for (int y = 0; y < h; y++)
                 {
-                    for (int x = 0; x < src.Width; x += Math.Max(1, src.Width / 20))
+                    for (int x = 0; x < w; x++)
                     {
                         Color c = src.GetPixel(x, y);
-                        totalBrightness += (c.R + c.G + c.B) / 3;
-                        sampleCount++;
-                    }
-                }
-                bool isDarkBackground = (sampleCount > 0) && ((totalBrightness / sampleCount) < 128);
+                        int l = (int)(c.R * 0.299 + c.G * 0.587 + c.B * 0.114);
+                        lum[x, y] = l;
 
-                using (Bitmap scaled = new Bitmap(newW, newH, PixelFormat.Format24bppRgb))
-                {
-                    using (Graphics g = Graphics.FromImage(scaled))
-                    {
-                        g.Clear(Color.White);
-                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        g.SmoothingMode = SmoothingMode.HighQuality;
-                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-
-                        g.DrawImage(src, new Rectangle(pad, pad, scaledW, scaledH));
-                    }
-
-                    for (int y = pad; y < pad + scaledH; y++)
-                    {
-                        for (int x = pad; x < pad + scaledW; x++)
+                        if (x % 4 == 0 && y % 4 == 0)
                         {
-                            Color p = scaled.GetPixel(x, y);
-                            int lum = (int)(p.R * 0.299 + p.G * 0.587 + p.B * 0.114);
-                            if (isDarkBackground)
-                            {
-                                lum = 255 - lum;
-                            }
-
-                            int adjusted;
-                            if (lum > 225)
-                                adjusted = 255;
-                            else if (lum < 140)
-                                adjusted = 0;
-                            else
-                                adjusted = (int)((lum - 140) * 255.0 / (225 - 140));
-
-                            scaled.SetPixel(x, y, Color.FromArgb(adjusted, adjusted, adjusted));
+                            totalBrightness += l;
+                            sampleCount++;
                         }
                     }
+                }
 
-                    string tempPath = Path.Combine(Path.GetTempPath(), "gauss_ocr_" + Guid.NewGuid().ToString("N") + ".png");
-                    scaled.Save(tempPath, ImageFormat.Png);
-                    return tempPath;
+                bool isDarkBackground = (sampleCount > 0) && ((totalBrightness / sampleCount) < 128);
+                if (isDarkBackground)
+                {
+                    for (int y = 0; y < h; y++)
+                        for (int x = 0; x < w; x++)
+                            lum[x, y] = 255 - lum[x, y];
+                }
+
+                int[] darkCountPerRow = new int[h];
+                for (int y = 0; y < h; y++)
+                {
+                    int count = 0;
+                    for (int x = 0; x < w; x++)
+                    {
+                        if (lum[x, y] < 175)
+                            count++;
+                    }
+                    darkCountPerRow[y] = count;
+                }
+
+                List<(int Top, int Bottom)> bands = new List<(int Top, int Bottom)>();
+                int inBandStart = -1;
+                for (int y = 0; y < h; y++)
+                {
+                    bool hasText = darkCountPerRow[y] >= 3;
+                    if (hasText && inBandStart == -1)
+                    {
+                        inBandStart = y;
+                    }
+                    else if (!hasText && inBandStart != -1)
+                    {
+                        if (y - inBandStart >= 5)
+                            bands.Add((inBandStart, y - 1));
+                        inBandStart = -1;
+                    }
+                }
+                if (inBandStart != -1 && (h - inBandStart) >= 5)
+                {
+                    bands.Add((inBandStart, h - 1));
+                }
+
+                if (bands.Count == 0)
+                {
+                    bands.Add((0, h - 1));
+                }
+
+                foreach (var band in bands)
+                {
+                    int top = Math.Max(0, band.Top - 4);
+                    int bottom = Math.Min(h - 1, band.Bottom + 4);
+                    int bandH = bottom - top + 1;
+
+                    int left = 0;
+                    int right = w - 1;
+                    for (int x = 0; x < w; x++)
+                    {
+                        int colDark = 0;
+                        for (int y = band.Top; y <= band.Bottom; y++)
+                            if (lum[x, y] < 175) colDark++;
+                        if (colDark >= 1) { left = Math.Max(0, x - 6); break; }
+                    }
+                    for (int x = w - 1; x >= left; x--)
+                    {
+                        int colDark = 0;
+                        for (int y = band.Top; y <= band.Bottom; y++)
+                            if (lum[x, y] < 175) colDark++;
+                        if (colDark >= 1) { right = Math.Min(w - 1, x + 6); break; }
+                    }
+
+                    int bandW = Math.Max(1, right - left + 1);
+
+                    using (Bitmap sliceClean = new Bitmap(bandW, bandH, PixelFormat.Format24bppRgb))
+                    {
+                        for (int y = 0; y < bandH; y++)
+                        {
+                            for (int x = 0; x < bandW; x++)
+                            {
+                                int l = lum[left + x, top + y];
+                                int v;
+                                if (l > 210) v = 255;
+                                else if (l < 90) v = 0;
+                                else v = (int)((l - 90) * 255.0 / (210 - 90));
+
+                                sliceClean.SetPixel(x, y, Color.FromArgb(v, v, v));
+                            }
+                        }
+
+                        int scale = 4;
+                        int padX = 48;
+                        int padY = 36;
+                        int outW = bandW * scale + padX * 2;
+                        int outH = bandH * scale + padY * 2;
+
+                        using (Bitmap scaledSlice = new Bitmap(outW, outH, PixelFormat.Format24bppRgb))
+                        {
+                            using (Graphics g = Graphics.FromImage(scaledSlice))
+                            {
+                                g.Clear(Color.White);
+                                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                                g.SmoothingMode = SmoothingMode.HighQuality;
+                                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                                g.DrawImage(sliceClean, new Rectangle(padX, padY, bandW * scale, bandH * scale));
+                            }
+
+                            string tempPath = Path.Combine(
+                                Path.GetTempPath(),
+                                $"gauss_ocr_line_{Guid.NewGuid():N}.png");
+                            scaledSlice.Save(tempPath, ImageFormat.Png);
+                            tempFiles.Add(tempPath);
+                        }
+                    }
                 }
             }
+
+            return tempFiles;
         }
 
         private static string ExtractTextFromImageWindowsOcr(string imagePath)
         {
-            string processedPath = PreprocessImageForOcr(imagePath);
+            List<string> slicePaths = CreateOcrLineSlices(imagePath);
             try
             {
-                string escapedPath = processedPath.Replace("'", "''");
+                StringBuilder psArrayBuilder = new StringBuilder();
+                psArrayBuilder.Append("@(");
+                for (int i = 0; i < slicePaths.Count; i++)
+                {
+                    if (i > 0) psArrayBuilder.Append(", ");
+                    psArrayBuilder.Append($"'{slicePaths[i].Replace("'", "''")}'");
+                }
+                psArrayBuilder.Append(")");
+
                 string psScript = $@"
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
@@ -499,63 +586,35 @@ Function Await($WinRtTask, $ResultType) {{
     $netTask.Result
 }}
 
-$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync('{escapedPath}')) ([Windows.Storage.StorageFile])
-$stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
-$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
-$bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
-
 $lang = New-Object Windows.Globalization.Language('en-US')
 $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($lang)
 if ($null -eq $engine) {{
     $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 }}
-$result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
 
-$allWords = @()
-foreach ($line in $result.Lines) {{
-    foreach ($w in $line.Words) {{
-        $rect = $w.BoundingRect
-        $centerY = $rect.Y + ($rect.Height / 2.0)
-        $allWords += [PSCustomObject]@{{
-            Text = $w.Text
-            X = $rect.X
-            Y = $rect.Y
-            CenterY = $centerY
-            Height = $rect.Height
-        }}
-    }}
-}}
+$files = {psArrayBuilder}
+foreach ($path in $files) {{
+    $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])
+    $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+    $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+    $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+    $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
 
-if ($allWords.Count -gt 0) {{
-    $sortedByY = $allWords | Sort-Object CenterY
-    $rows = @()
-    foreach ($word in $sortedByY) {{
-        $placed = $false
-        foreach ($row in $rows) {{
-            $tol = [Math]::Max($row.AvgHeight, $word.Height) * 0.65
-            if ([Math]::Abs($word.CenterY - $row.CenterY) -le $tol) {{
-                $row.Words += $word
-                $count = $row.Words.Count
-                $row.CenterY = (($row.CenterY * ($count - 1)) + $word.CenterY) / $count
-                $row.AvgHeight = (($row.AvgHeight * ($count - 1)) + $word.Height) / $count
-                $placed = $true
-                break
-            }}
-        }}
-        if (-not $placed) {{
-            $rows += [PSCustomObject]@{{
-                CenterY = $word.CenterY
-                AvgHeight = $word.Height
-                Words = @($word)
+    $words = @()
+    foreach ($line in $result.Lines) {{
+        foreach ($w in $line.Words) {{
+            $words += [PSCustomObject]@{{
+                Text = $w.Text
+                X = $w.BoundingRect.X
             }}
         }}
     }}
 
-    $rows = $rows | Sort-Object CenterY
-    foreach ($row in $rows) {{
-        $lineText = ($row.Words | Sort-Object X | ForEach-Object {{ $_.Text }}) -join ' '
+    if ($words.Count -gt 0) {{
+        $lineText = ($words | Sort-Object X | ForEach-Object {{ $_.Text }}) -join ' '
         Write-Output $lineText
     }}
+    $stream.Dispose()
 }}
 ";
                 string base64Script = Convert.ToBase64String(Encoding.Unicode.GetBytes(psScript));
@@ -574,15 +633,18 @@ if ($allWords.Count -gt 0) {{
                 using (Process proc = Process.Start(psi))
                 {
                     string output = proc.StandardOutput.ReadToEnd();
-                    proc.WaitForExit(15000);
+                    proc.WaitForExit(20000);
                     return SanitizeOcrText(output);
                 }
             }
             finally
             {
-                if (File.Exists(processedPath))
+                foreach (string p in slicePaths)
                 {
-                    try { File.Delete(processedPath); } catch { }
+                    if (File.Exists(p))
+                    {
+                        try { File.Delete(p); } catch { }
+                    }
                 }
             }
         }
@@ -673,9 +735,19 @@ if ($allWords.Count -gt 0) {{
                 if (string.IsNullOrWhiteSpace(trimmed))
                     continue;
 
+                trimmed = Regex.Replace(trimmed, @"\s*/\s*", "/");
+
                 if (!trimmed.Contains("=") && (trimmed.Contains(":") || trimmed.Contains("?")))
                 {
                     trimmed = Regex.Replace(trimmed, @"[\?:]+", "=");
+                }
+
+                if (!trimmed.Contains("="))
+                {
+                    trimmed = Regex.Replace(
+                        trimmed,
+                        @"([a-zA-Z]\w*(?:/\d+(?:\.\d+)?)?)\s+([+-]?\d+(?:/\d+|\.\d+)?)\s*$",
+                        "$1 = $2");
                 }
 
                 validLines.Add(trimmed);
