@@ -248,7 +248,8 @@ namespace GaussSolver
                 .Replace('\u2212', '-')
                 .Replace('\u2013', '-')
                 .Replace('\u2014', '-')
-                .Replace('×', '*');
+                .Replace('×', '*')
+                .Replace('÷', '/');
 
             string[] sides = normalizedEq.Split('=');
 
@@ -270,8 +271,9 @@ namespace GaussSolver
             var coefficients = new Dictionary<string, Fraction>(
                 StringComparer.OrdinalIgnoreCase);
 
+            // يدعم: 2x, 3/4 x, x/2, 3x/4, -y/3
             string pattern =
-                @"(?<sign>[+-]?)\s*(?<coef>(?:\d+\s*/\s*\d+|\d+(?:\.\d+)?|\.\d+)?)\s*\*?\s*(?<var>[a-zA-Z]\w*)";
+                @"(?<sign>[+-]?)\s*(?<coef>(?:\d+\s*/\s*\d+|\d+(?:\.\d+)?|\.\d+)?)\s*\*?\s*(?<var>[a-zA-Z]\w*)(?:\s*/\s*(?<denom>\d+(?:\.\d+)?|\.\d+))?";
 
             MatchCollection matches = Regex.Matches(left, pattern);
 
@@ -296,6 +298,7 @@ namespace GaussSolver
                 string sign = match.Groups["sign"].Value;
                 string coefficientText = match.Groups["coef"].Value.Trim();
                 string variable = match.Groups["var"].Value;
+                string denomText = match.Groups["denom"].Value.Trim();
 
                 if (m > 0 && string.IsNullOrEmpty(sign))
                 {
@@ -315,6 +318,16 @@ namespace GaussSolver
                     errorMessage =
                         $"Invalid coefficient '{coefficientText}' for variable {variable}.";
                     return false;
+                }
+
+                if (denomText.Length > 0)
+                {
+                    if (!Fraction.TryParse(denomText, out Fraction denomVal) || denomVal.IsZero)
+                    {
+                        errorMessage = $"Invalid denominator '/{denomText}' for variable {variable}.";
+                        return false;
+                    }
+                    coefficient = coefficient / denomVal;
                 }
 
                 if (sign == "-")
@@ -403,9 +416,11 @@ namespace GaussSolver
             using (Bitmap src = new Bitmap(originalPath))
             {
                 int scale = 3;
-                int pad = 40;
-                int newW = src.Width * scale + pad * 2;
-                int newH = src.Height * scale + pad * 2;
+                int pad = 48;
+                int scaledW = src.Width * scale;
+                int scaledH = src.Height * scale;
+                int newW = scaledW + pad * 2;
+                int newH = scaledH + pad * 2;
 
                 long totalBrightness = 0;
                 int sampleCount = 0;
@@ -427,41 +442,31 @@ namespace GaussSolver
                         g.Clear(Color.White);
                         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                         g.SmoothingMode = SmoothingMode.HighQuality;
+                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
 
-                        if (isDarkBackground)
+                        g.DrawImage(src, new Rectangle(pad, pad, scaledW, scaledH));
+                    }
+
+                    for (int y = pad; y < pad + scaledH; y++)
+                    {
+                        for (int x = pad; x < pad + scaledW; x++)
                         {
-                            using (Bitmap inverted = new Bitmap(src.Width, src.Height))
+                            Color p = scaled.GetPixel(x, y);
+                            int lum = (int)(p.R * 0.299 + p.G * 0.587 + p.B * 0.114);
+                            if (isDarkBackground)
                             {
-                                for (int y = 0; y < src.Height; y++)
-                                {
-                                    for (int x = 0; x < src.Width; x++)
-                                    {
-                                        Color p = src.GetPixel(x, y);
-                                        int lum = (int)(p.R * 0.3 + p.G * 0.59 + p.B * 0.11);
-                                        int inv = 255 - lum;
-                                        int bw = inv < 150 ? 0 : 255;
-                                        inverted.SetPixel(x, y, Color.FromArgb(bw, bw, bw));
-                                    }
-                                }
-                                g.DrawImage(inverted, new Rectangle(pad, pad, src.Width * scale, src.Height * scale));
+                                lum = 255 - lum;
                             }
-                        }
-                        else
-                        {
-                            using (Bitmap highContrast = new Bitmap(src.Width, src.Height))
-                            {
-                                for (int y = 0; y < src.Height; y++)
-                                {
-                                    for (int x = 0; x < src.Width; x++)
-                                    {
-                                        Color p = src.GetPixel(x, y);
-                                        int lum = (int)(p.R * 0.3 + p.G * 0.59 + p.B * 0.11);
-                                        int bw = lum < 165 ? 0 : 255;
-                                        highContrast.SetPixel(x, y, Color.FromArgb(bw, bw, bw));
-                                    }
-                                }
-                                g.DrawImage(highContrast, new Rectangle(pad, pad, src.Width * scale, src.Height * scale));
-                            }
+
+                            int adjusted;
+                            if (lum > 225)
+                                adjusted = 255;
+                            else if (lum < 140)
+                                adjusted = 0;
+                            else
+                                adjusted = (int)((lum - 140) * 255.0 / (225 - 140));
+
+                            scaled.SetPixel(x, y, Color.FromArgb(adjusted, adjusted, adjusted));
                         }
                     }
 
@@ -505,9 +510,52 @@ if ($null -eq $engine) {{
     $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 }}
 $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+
+$allWords = @()
 foreach ($line in $result.Lines) {{
-    $words = ($line.Words | Sort-Object {{ $_.BoundingRect.X }} | ForEach-Object {{ $_.Text }}) -join ' '
-    Write-Output $words
+    foreach ($w in $line.Words) {{
+        $rect = $w.BoundingRect
+        $centerY = $rect.Y + ($rect.Height / 2.0)
+        $allWords += [PSCustomObject]@{{
+            Text = $w.Text
+            X = $rect.X
+            Y = $rect.Y
+            CenterY = $centerY
+            Height = $rect.Height
+        }}
+    }}
+}}
+
+if ($allWords.Count -gt 0) {{
+    $sortedByY = $allWords | Sort-Object CenterY
+    $rows = @()
+    foreach ($word in $sortedByY) {{
+        $placed = $false
+        foreach ($row in $rows) {{
+            $tol = [Math]::Max($row.AvgHeight, $word.Height) * 0.65
+            if ([Math]::Abs($word.CenterY - $row.CenterY) -le $tol) {{
+                $row.Words += $word
+                $count = $row.Words.Count
+                $row.CenterY = (($row.CenterY * ($count - 1)) + $word.CenterY) / $count
+                $row.AvgHeight = (($row.AvgHeight * ($count - 1)) + $word.Height) / $count
+                $placed = $true
+                break
+            }}
+        }}
+        if (-not $placed) {{
+            $rows += [PSCustomObject]@{{
+                CenterY = $word.CenterY
+                AvgHeight = $word.Height
+                Words = @($word)
+            }}
+        }}
+    }}
+
+    $rows = $rows | Sort-Object CenterY
+    foreach ($row in $rows) {{
+        $lineText = ($row.Words | Sort-Object X | ForEach-Object {{ $_.Text }}) -join ' '
+        Write-Output $lineText
+    }}
 }}
 ";
                 string base64Script = Convert.ToBase64String(Encoding.Unicode.GetBytes(psScript));
