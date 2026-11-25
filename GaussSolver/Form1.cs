@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace GaussSolver
@@ -35,7 +36,6 @@ namespace GaussSolver
         private Label lblDescription;
         private Label lblFinalResult;
         private DataGridView dgvMatrix;
-        //--------------
 
         public Form1()
         {
@@ -532,42 +532,56 @@ namespace GaussSolver
             return false;
         }
 
-        private void btnImport_Click(object sender, EventArgs e)
+        private async void btnImport_Click(object sender, EventArgs e)
         {
             using (OpenFileDialog ofd = new OpenFileDialog())
             {
                 ofd.Title = "Import Equations or Matrix from File / Image";
                 ofd.Filter = "All Supported Files (*.txt;*.csv;*.pdf;*.png;*.jpg;*.jpeg;*.bmp)|*.txt;*.csv;*.pdf;*.png;*.jpg;*.jpeg;*.bmp|Text & PDF Files (*.txt;*.csv;*.pdf)|*.txt;*.csv;*.pdf|Image Files (*.png;*.jpg;*.jpeg;*.bmp)|*.png;*.jpg;*.jpeg;*.bmp";
 
-                if (ofd.ShowDialog() == DialogResult.OK)
+                if (ofd.ShowDialog() != DialogResult.OK) return;
+
+                string path = ofd.FileName;
+                this.Cursor = Cursors.WaitCursor;
+                btnImport.Enabled = false;
+                btnImport.Text = "Reading file...";
+
+                bool ok;
+                string extractedText, extractError;
+                try
                 {
-                    this.Cursor = Cursors.WaitCursor;
-                    try
+                    (ok, extractedText, extractError) = await Task.Run(() =>
                     {
-                        if (!InputParser.TryExtractTextFromFile(ofd.FileName, out string extractedText, out string extractError))
-                        {
-                            MessageBox.Show(extractError, "Import Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                            return;
-                        }
+                        bool r = InputParser.TryExtractTextFromFile(path, out string t, out string err);
+                        return (r, t, err);
+                    });
+                }
+                finally
+                {
+                    this.Cursor = Cursors.Default;
+                    btnImport.Enabled = true;
+                    btnImport.Text = "Import File / Image (OCR & PDF)";
+                }
 
-                        txtInput.Text = extractedText;
-                        tabInputMode.SelectedTab = tabText;
+                if (!ok)
+                {
+                    MessageBox.Show(extractError, "Import Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
 
-                        if (TryParseTextInput(extractedText, out Matrix parsedMatrix, out _))
-                        {
-                            PopulateGridFromMatrix(parsedMatrix);
-                            btnSolve_Click(sender, e);
-                        }
-                        else
-                        {
-                            MessageBox.Show("Text extracted! Please review the extracted equations in the text box and click Solve.",
-                                "Text Extracted", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        }
-                    }
-                    finally
-                    {
-                        this.Cursor = Cursors.Default;
-                    }
+                txtInput.Text = extractedText;
+                tabInputMode.SelectedTab = tabText;
+
+                if (TryParseTextInput(extractedText, out Matrix parsedMatrix, out string parseError))
+                {
+                    PopulateGridFromMatrix(parsedMatrix);
+                    btnSolve_Click(sender, e);
+                }
+                else
+                {
+                    MessageBox.Show("Text extracted, but it could not be parsed:\n" + parseError +
+                                    "\n\nPlease fix it in the text box and click Solve.",
+                                    "Text Extracted", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }
         }
