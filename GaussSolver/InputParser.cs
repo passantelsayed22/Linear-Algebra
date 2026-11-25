@@ -485,19 +485,41 @@ namespace GaussSolver
                     }
                 }
 
-                // 2) قص الهوامش البيضاء الفارغة حول النص لمعرفة الارتفاع الحقيقي لكتلة المعادلات
+                // 2) حساب متوسط ارتفاع السطر الواحد (Single Line Height)
+                List<int> lineHeights = new List<int>();
+                int bandStart = -1;
+                for (int y = 0; y < h; y++)
+                {
+                    bool hasInk = CountDarkInRow(minRgb, w, y, 175) >= 2;
+                    if (hasInk && bandStart == -1)
+                    {
+                        bandStart = y;
+                    }
+                    else if (!hasInk && bandStart != -1)
+                    {
+                        if (y - bandStart >= 5)
+                            lineHeights.Add(y - bandStart);
+                        bandStart = -1;
+                    }
+                }
+                if (bandStart != -1 && h - bandStart >= 5)
+                    lineHeights.Add(h - bandStart);
+
+                double avgLineHeight = lineHeights.Count > 0 ? lineHeights.Average() : 30.0;
+
+                // 3) قص الهوامش البيضاء الفارغة مع ترك هامش 24 بكسل حتى لا تُقص إشارة السالب '-' في أول السطر
                 int inkTop = 0, inkBottom = h - 1, inkLeft = 0, inkRight = w - 1;
                 while (inkTop < inkBottom && CountDarkInRow(minRgb, w, inkTop, 180) < 2) inkTop++;
                 while (inkBottom > inkTop && CountDarkInRow(minRgb, w, inkBottom, 180) < 2) inkBottom--;
-                while (inkLeft < inkRight && CountDarkInCol(minRgb, h, inkLeft, 180) < 2) inkLeft++;
-                while (inkRight > inkLeft && CountDarkInCol(minRgb, h, inkRight, 180) < 2) inkRight--;
+                while (inkLeft < inkRight && CountDarkInCol(minRgb, h, inkLeft, 180) < 1) inkLeft++;
+                while (inkRight > inkLeft && CountDarkInCol(minRgb, h, inkRight, 180) < 1) inkRight--;
 
                 if (inkBottom - inkTop >= 12 && inkRight - inkLeft >= 12)
                 {
-                    inkTop = Math.Max(0, inkTop - 8);
-                    inkBottom = Math.Min(h - 1, inkBottom + 8);
-                    inkLeft = Math.Max(0, inkLeft - 8);
-                    inkRight = Math.Min(w - 1, inkRight + 8);
+                    inkTop = Math.Max(0, inkTop - 20);
+                    inkBottom = Math.Min(h - 1, inkBottom + 20);
+                    inkLeft = Math.Max(0, inkLeft - 24);
+                    inkRight = Math.Min(w - 1, inkRight + 24);
 
                     int nw = inkRight - inkLeft + 1;
                     int nh = inkBottom - inkTop + 1;
@@ -519,18 +541,10 @@ namespace GaussSolver
                     h = nh;
                 }
 
-                // 3) ضبط حجم الصورة على ارتفاع مثالي (~220 بكسل) لـ Tesseract
-                double idealScale = 220.0 / Math.Max(1, h);
-                if (idealScale > 3.5) idealScale = 3.5;
-                if (idealScale < 0.45) idealScale = 0.45;
-
-                double altScale = h < 160 ? 3.0 : 1.0;
-
-                variants.Add(new OcrVariant
-                {
-                    Label = "ideal_minrgb_t155",
-                    Path = SaveProcessedVariant(minRgb, w, h, idealScale, mode: 2, threshold: 155)
-                });
+                // 4) ضبط ارتفاع السطر الواحد ليكون ~34 بكسل (المقاس المثالي لمحرك Tesseract)
+                double idealScale = 34.0 / Math.Max(1.0, avgLineHeight);
+                if (idealScale > 3.2) idealScale = 3.2;
+                if (idealScale < 0.65) idealScale = 0.65;
 
                 variants.Add(new OcrVariant
                 {
@@ -540,14 +554,20 @@ namespace GaussSolver
 
                 variants.Add(new OcrVariant
                 {
-                    Label = "ideal_lum_t165",
-                    Path = SaveProcessedVariant(lum, w, h, idealScale, mode: 2, threshold: 165)
+                    Label = "ideal_minrgb_gray",
+                    Path = SaveProcessedVariant(minRgb, w, h, idealScale, mode: 0, threshold: 0)
                 });
 
                 variants.Add(new OcrVariant
                 {
-                    Label = "alt_minrgb_t155",
-                    Path = SaveProcessedVariant(minRgb, w, h, altScale, mode: 2, threshold: 155)
+                    Label = "ideal_minrgb_t145",
+                    Path = SaveProcessedVariant(minRgb, w, h, idealScale, mode: 2, threshold: 145)
+                });
+
+                variants.Add(new OcrVariant
+                {
+                    Label = "ideal_lum_t160",
+                    Path = SaveProcessedVariant(lum, w, h, idealScale, mode: 2, threshold: 160)
                 });
             }
 
@@ -602,7 +622,7 @@ namespace GaussSolver
                     }
                 }
 
-                int pad = 36;
+                int pad = 40;
                 int scaledW = Math.Max(1, (int)Math.Round(w * scale));
                 int scaledH = Math.Max(1, (int)Math.Round(h * scale));
                 int outW = scaledW + pad * 2;
@@ -880,7 +900,6 @@ namespace GaussSolver
                     trimmed = Regex.Replace(trimmed, @"[\?:]+", "=");
                 }
 
-                // تصليح أخطاء قراءة الحروف المكررة فقط بدون المساس بمعامل "2z"
                 trimmed = Regex.Replace(trimmed, @"(\d)7[zZ]\b", "$1z");
                 trimmed = Regex.Replace(trimmed, @"([a-zA-Z])[247]\b", "$1");
                 trimmed = Regex.Replace(trimmed, @"[xX]{2,}", "x");
