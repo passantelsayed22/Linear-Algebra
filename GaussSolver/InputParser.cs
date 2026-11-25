@@ -282,7 +282,7 @@ namespace GaussSolver
                 StringComparer.OrdinalIgnoreCase);
 
             string pattern =
-                @"(?<sign>[+-]?)\s*(?<coef>(?:\d+\s*/\s*\d+|\d+(?:\.\d+)?|\.\d+)?)\s*\*?\s*(?<var>[a-zA-Z]\w*)(?:\s*/\s*(?<denom>\d+(?:\.\d+)?|\.\d+))?";
+                @"(?<sign>[+-]?)\s*(?<coef>(?:\d+\s*/\s*\d+|\d+(?:\.\d+)?|\.\d+)?)\s*\*?\s*(?<var>[a-zA-Z])(?:\s*/\s*(?<denom>\d+(?:\.\d+)?|\.\d+))?";
 
             MatchCollection matches = Regex.Matches(left, pattern);
 
@@ -306,7 +306,7 @@ namespace GaussSolver
                 Match match = matches[m];
                 string sign = match.Groups["sign"].Value;
                 string coefficientText = match.Groups["coef"].Value.Trim();
-                string variable = match.Groups["var"].Value;
+                string variable = match.Groups["var"].Value.ToLowerInvariant();
                 string denomText = match.Groups["denom"].Value.Trim();
 
                 if (m > 0 && string.IsNullOrEmpty(sign))
@@ -426,66 +426,163 @@ namespace GaussSolver
 
             using (Bitmap src = new Bitmap(originalPath))
             {
-                int w = src.Width;
-                int h = src.Height;
+                int fullW = src.Width;
+                int fullH = src.Height;
+                int[,] rawLum = new int[fullW, fullH];
+                int[,] rawMinRgb = new int[fullW, fullH];
+                int[,] rawMaxRgb = new int[fullW, fullH];
+
+                for (int y = 0; y < fullH; y++)
+                {
+                    for (int x = 0; x < fullW; x++)
+                    {
+                        Color c = src.GetPixel(x, y);
+                        rawLum[x, y] = (int)(c.R * 0.299 + c.G * 0.587 + c.B * 0.114);
+                        rawMinRgb[x, y] = Math.Min(c.R, Math.Min(c.G, c.B));
+                        rawMaxRgb[x, y] = Math.Max(c.R, Math.Max(c.G, c.B));
+                    }
+                }
+
+                // 1) قص أي حواف سوداء كبيرة (مثل سكرين شوت الموبايل)
+                int top = 0, bottom = fullH - 1, left = 0, right = fullW - 1;
+                while (top < bottom && GetRowAverage(rawLum, fullW, top) < 45) top++;
+                while (bottom > top && GetRowAverage(rawLum, fullW, bottom) < 45) bottom--;
+                while (left < right && GetColAverage(rawLum, fullH, left) < 45) left++;
+                while (right > left && GetColAverage(rawLum, fullH, right) < 45) right--;
+
+                if (bottom - top < 15 || right - left < 15)
+                {
+                    top = 0; bottom = fullH - 1; left = 0; right = fullW - 1;
+                }
+
+                int w = right - left + 1;
+                int h = bottom - top + 1;
                 int[,] lum = new int[w, h];
+                int[,] minRgb = new int[w, h];
 
-                long totalBrightness = 0;
-                int sampleCount = 0;
-
+                long sumLum = 0;
                 for (int y = 0; y < h; y++)
                 {
                     for (int x = 0; x < w; x++)
                     {
-                        Color c = src.GetPixel(x, y);
-                        int l = (int)(c.R * 0.299 + c.G * 0.587 + c.B * 0.114);
+                        int l = rawLum[left + x, top + y];
                         lum[x, y] = l;
+                        minRgb[x, y] = rawMinRgb[left + x, top + y];
+                        sumLum += l;
+                    }
+                }
 
-                        if (x % 4 == 0 && y % 4 == 0)
+                bool isDarkBackground = (sumLum / Math.Max(1, w * h)) < 128;
+                if (isDarkBackground)
+                {
+                    for (int y = 0; y < h; y++)
+                    {
+                        for (int x = 0; x < w; x++)
                         {
-                            totalBrightness += l;
-                            sampleCount++;
+                            lum[x, y] = 255 - lum[x, y];
+                            minRgb[x, y] = 255 - rawMaxRgb[left + x, top + y];
                         }
                     }
                 }
 
-                bool isDarkBackground = (sampleCount > 0) && ((totalBrightness / sampleCount) < 128);
-                if (isDarkBackground)
+                // 2) قص الهوامش البيضاء الفارغة حول النص لمعرفة الارتفاع الحقيقي لكتلة المعادلات
+                int inkTop = 0, inkBottom = h - 1, inkLeft = 0, inkRight = w - 1;
+                while (inkTop < inkBottom && CountDarkInRow(minRgb, w, inkTop, 180) < 2) inkTop++;
+                while (inkBottom > inkTop && CountDarkInRow(minRgb, w, inkBottom, 180) < 2) inkBottom--;
+                while (inkLeft < inkRight && CountDarkInCol(minRgb, h, inkLeft, 180) < 2) inkLeft++;
+                while (inkRight > inkLeft && CountDarkInCol(minRgb, h, inkRight, 180) < 2) inkRight--;
+
+                if (inkBottom - inkTop >= 12 && inkRight - inkLeft >= 12)
                 {
-                    for (int y = 0; y < h; y++)
-                        for (int x = 0; x < w; x++)
-                            lum[x, y] = 255 - lum[x, y];
+                    inkTop = Math.Max(0, inkTop - 8);
+                    inkBottom = Math.Min(h - 1, inkBottom + 8);
+                    inkLeft = Math.Max(0, inkLeft - 8);
+                    inkRight = Math.Min(w - 1, inkRight + 8);
+
+                    int nw = inkRight - inkLeft + 1;
+                    int nh = inkBottom - inkTop + 1;
+                    int[,] tightLum = new int[nw, nh];
+                    int[,] tightMin = new int[nw, nh];
+
+                    for (int y = 0; y < nh; y++)
+                    {
+                        for (int x = 0; x < nw; x++)
+                        {
+                            tightLum[x, y] = lum[inkLeft + x, inkTop + y];
+                            tightMin[x, y] = minRgb[inkLeft + x, inkTop + y];
+                        }
+                    }
+
+                    lum = tightLum;
+                    minRgb = tightMin;
+                    w = nw;
+                    h = nh;
                 }
 
+                // 3) ضبط حجم الصورة على ارتفاع مثالي (~220 بكسل) لـ Tesseract
+                double idealScale = 220.0 / Math.Max(1, h);
+                if (idealScale > 3.5) idealScale = 3.5;
+                if (idealScale < 0.45) idealScale = 0.45;
+
+                double altScale = h < 160 ? 3.0 : 1.0;
+
                 variants.Add(new OcrVariant
                 {
-                    Label = "scale3_gray",
-                    Path = SaveProcessedVariant(lum, w, h, 3, mode: 0, threshold: 0)
+                    Label = "ideal_minrgb_t155",
+                    Path = SaveProcessedVariant(minRgb, w, h, idealScale, mode: 2, threshold: 155)
                 });
 
                 variants.Add(new OcrVariant
                 {
-                    Label = "scale3_stretch",
-                    Path = SaveProcessedVariant(lum, w, h, 3, mode: 1, threshold: 0)
+                    Label = "ideal_lum_gray",
+                    Path = SaveProcessedVariant(lum, w, h, idealScale, mode: 0, threshold: 0)
                 });
 
                 variants.Add(new OcrVariant
                 {
-                    Label = "scale4_gray",
-                    Path = SaveProcessedVariant(lum, w, h, 4, mode: 0, threshold: 0)
+                    Label = "ideal_lum_t165",
+                    Path = SaveProcessedVariant(lum, w, h, idealScale, mode: 2, threshold: 165)
                 });
 
                 variants.Add(new OcrVariant
                 {
-                    Label = "scale3_t165",
-                    Path = SaveProcessedVariant(lum, w, h, 3, mode: 2, threshold: 165)
+                    Label = "alt_minrgb_t155",
+                    Path = SaveProcessedVariant(minRgb, w, h, altScale, mode: 2, threshold: 155)
                 });
             }
 
             return variants;
         }
 
-        private static string SaveProcessedVariant(int[,] lum, int w, int h, int scale, int mode, int threshold)
+        private static int GetRowAverage(int[,] mat, int width, int y)
+        {
+            long sum = 0;
+            for (int x = 0; x < width; x++) sum += mat[x, y];
+            return (int)(sum / Math.Max(1, width));
+        }
+
+        private static int GetColAverage(int[,] mat, int height, int x)
+        {
+            long sum = 0;
+            for (int y = 0; y < height; y++) sum += mat[x, y];
+            return (int)(sum / Math.Max(1, height));
+        }
+
+        private static int CountDarkInRow(int[,] mat, int width, int y, int thresh)
+        {
+            int c = 0;
+            for (int x = 0; x < width; x++) if (mat[x, y] < thresh) c++;
+            return c;
+        }
+
+        private static int CountDarkInCol(int[,] mat, int height, int x, int thresh)
+        {
+            int c = 0;
+            for (int y = 0; y < height; y++) if (mat[x, y] < thresh) c++;
+            return c;
+        }
+
+        private static string SaveProcessedVariant(int[,] lum, int w, int h, double scale, int mode, int threshold)
         {
             using (Bitmap baseBmp = new Bitmap(w, h, PixelFormat.Format24bppRgb))
             {
@@ -506,8 +603,8 @@ namespace GaussSolver
                 }
 
                 int pad = 36;
-                int scaledW = w * scale;
-                int scaledH = h * scale;
+                int scaledW = Math.Max(1, (int)Math.Round(w * scale));
+                int scaledH = Math.Max(1, (int)Math.Round(h * scale));
                 int outW = scaledW + pad * 2;
                 int outH = scaledH + pad * 2;
 
@@ -555,9 +652,17 @@ namespace GaussSolver
 
             long score = 0;
 
-            if (TryParseEquations(text, out Matrix eqMat, out _))
+            if (TryParseEquations(text, out Matrix eqMat, out _, out string[] vars, out _))
             {
-                score += 100000 + (eqMat.Rows * 5000) + (eqMat.Columns * 1000);
+                score += 100000 + (eqMat.Rows * 6000);
+                int diff = Math.Abs(vars.Length - eqMat.Rows);
+                score -= diff * 4000;
+
+                foreach (string line in lines)
+                {
+                    if (Regex.IsMatch(line, @"\b0\d+\b") || Regex.IsMatch(line, @"\b0[a-zA-Z]\b"))
+                        score -= 8000;
+                }
             }
             else if (TryParseMatrix(text, out Matrix mMat, out _))
             {
@@ -756,7 +861,8 @@ namespace GaussSolver
                 .Replace('\u2013', '-')
                 .Replace('\u2014', '-')
                 .Replace('~', '-')
-                .Replace('×', '*');
+                .Replace('×', '*')
+                .Replace('÷', '/');
 
             string[] lines = cleaned.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
             List<string> validLines = new List<string>();
@@ -774,11 +880,18 @@ namespace GaussSolver
                     trimmed = Regex.Replace(trimmed, @"[\?:]+", "=");
                 }
 
-                trimmed = Regex.Replace(trimmed, @"\b2?[zZ]2?\b", "z");
-                trimmed = Regex.Replace(trimmed, @"\b[wW]{2}\b", "w");
+                // تصليح أخطاء قراءة الحروف المكررة فقط بدون المساس بمعامل "2z"
+                trimmed = Regex.Replace(trimmed, @"(\d)7[zZ]\b", "$1z");
+                trimmed = Regex.Replace(trimmed, @"([a-zA-Z])[247]\b", "$1");
+                trimmed = Regex.Replace(trimmed, @"[xX]{2,}", "x");
+                trimmed = Regex.Replace(trimmed, @"[yY]{2,}", "y");
+                trimmed = Regex.Replace(trimmed, @"[zZ]{2,}", "z");
+                trimmed = Regex.Replace(trimmed, @"[wW]{2,}", "w");
                 trimmed = Regex.Replace(trimmed, @"\b([a-zA-Z])e\s*=", "$1 =");
-                trimmed = Regex.Replace(trimmed, @"\b[xX]{2}\b", "x");
-                if (Regex.IsMatch(trimmed, @"\bx\b") && Regex.IsMatch(trimmed, @"\by\b") && !Regex.IsMatch(trimmed, @"\bz\b"))
+
+                if (Regex.IsMatch(trimmed, @"\bx\b", RegexOptions.IgnoreCase) &&
+                    Regex.IsMatch(trimmed, @"\by\b", RegexOptions.IgnoreCase) &&
+                    !Regex.IsMatch(trimmed, @"\bz\b", RegexOptions.IgnoreCase))
                 {
                     trimmed = Regex.Replace(trimmed, @"([+-]\s*)2(/\d+)", "$1z$2");
                 }
