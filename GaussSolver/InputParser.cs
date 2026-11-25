@@ -420,9 +420,10 @@ namespace GaussSolver
             }
         }
 
-        private static List<OcrVariant> BuildOcrVariants(string originalPath)
+        private static List<OcrVariant> BuildOcrVariants(string originalPath, out bool[] lineStartsWithMinus)
         {
             var variants = new List<OcrVariant>();
+            lineStartsWithMinus = Array.Empty<bool>();
 
             using (Bitmap src = new Bitmap(originalPath))
             {
@@ -485,8 +486,8 @@ namespace GaussSolver
                     }
                 }
 
-                // 2) حساب متوسط ارتفاع السطر الواحد (Single Line Height)
-                List<int> lineHeights = new List<int>();
+                // 2) تحديد نطاقات السطور الأفقية وفحص ما إذا كان أول عنصر في السطر إشارة سالب '-'
+                List<(int Top, int Bottom)> bands = new List<(int Top, int Bottom)>();
                 int bandStart = -1;
                 for (int y = 0; y < h; y++)
                 {
@@ -498,16 +499,24 @@ namespace GaussSolver
                     else if (!hasInk && bandStart != -1)
                     {
                         if (y - bandStart >= 5)
-                            lineHeights.Add(y - bandStart);
+                            bands.Add((bandStart, y - 1));
                         bandStart = -1;
                     }
                 }
                 if (bandStart != -1 && h - bandStart >= 5)
-                    lineHeights.Add(h - bandStart);
+                    bands.Add((bandStart, h - 1));
 
-                double avgLineHeight = lineHeights.Count > 0 ? lineHeights.Average() : 30.0;
+                lineStartsWithMinus = new bool[bands.Count];
+                for (int b = 0; b < bands.Count; b++)
+                {
+                    lineStartsWithMinus[b] = DetectLeadingMinusSign(minRgb, w, bands[b].Top, bands[b].Bottom);
+                }
 
-                // 3) قص الهوامش البيضاء الفارغة مع ترك هامش 24 بكسل حتى لا تُقص إشارة السالب '-' في أول السطر
+                double avgLineHeight = bands.Count > 0
+                    ? bands.Average(b => b.Bottom - b.Top + 1)
+                    : 30.0;
+
+                // 3) قص الهوامش البيضاء الفارغة مع ترك هامش 28 بكسل
                 int inkTop = 0, inkBottom = h - 1, inkLeft = 0, inkRight = w - 1;
                 while (inkTop < inkBottom && CountDarkInRow(minRgb, w, inkTop, 180) < 2) inkTop++;
                 while (inkBottom > inkTop && CountDarkInRow(minRgb, w, inkBottom, 180) < 2) inkBottom--;
@@ -518,8 +527,8 @@ namespace GaussSolver
                 {
                     inkTop = Math.Max(0, inkTop - 20);
                     inkBottom = Math.Min(h - 1, inkBottom + 20);
-                    inkLeft = Math.Max(0, inkLeft - 24);
-                    inkRight = Math.Min(w - 1, inkRight + 24);
+                    inkLeft = Math.Max(0, inkLeft - 28);
+                    inkRight = Math.Min(w - 1, inkRight + 28);
 
                     int nw = inkRight - inkLeft + 1;
                     int nh = inkBottom - inkTop + 1;
@@ -541,7 +550,6 @@ namespace GaussSolver
                     h = nh;
                 }
 
-                // 4) ضبط ارتفاع السطر الواحد ليكون ~34 بكسل (المقاس المثالي لمحرك Tesseract)
                 double idealScale = 34.0 / Math.Max(1.0, avgLineHeight);
                 if (idealScale > 3.2) idealScale = 3.2;
                 if (idealScale < 0.65) idealScale = 0.65;
@@ -572,6 +580,63 @@ namespace GaussSolver
             }
 
             return variants;
+        }
+
+        // فحص هندسي مباشر لأول شكل في السطر: لو عرضه أكبر من ارتفاعه بوضوح (شرطة أفقية '-') نعرف أن السطر يبدأ بسالب
+        private static bool DetectLeadingMinusSign(int[,] minRgb, int w, int bandTop, int bandBottom)
+        {
+            int bandH = bandBottom - bandTop + 1;
+            if (bandH < 6) return false;
+
+            int firstX = -1;
+            for (int x = 0; x < w; x++)
+            {
+                for (int y = bandTop; y <= bandBottom; y++)
+                {
+                    if (minRgb[x, y] < 165)
+                    {
+                        firstX = x;
+                        break;
+                    }
+                }
+                if (firstX != -1) break;
+            }
+
+            if (firstX == -1) return false;
+
+            int endX = firstX;
+            while (endX + 1 < w)
+            {
+                bool hasDark = false;
+                for (int y = bandTop; y <= bandBottom; y++)
+                {
+                    if (minRgb[endX + 1, y] < 165)
+                    {
+                        hasDark = true;
+                        break;
+                    }
+                }
+                if (!hasDark) break;
+                endX++;
+            }
+
+            int minY = bandBottom, maxY = bandTop;
+            for (int x = firstX; x <= endX; x++)
+            {
+                for (int y = bandTop; y <= bandBottom; y++)
+                {
+                    if (minRgb[x, y] < 165)
+                    {
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                    }
+                }
+            }
+
+            int compW = endX - firstX + 1;
+            int compH = maxY - minY + 1;
+
+            return compW >= 4 && compH <= Math.Max(6, bandH / 3) && compW >= compH * 2;
         }
 
         private static int GetRowAverage(int[,] mat, int width, int y)
@@ -739,7 +804,7 @@ namespace GaussSolver
                     "Missing 'tessdata\\eng.traineddata' next to the program.\n" +
                     "Expected folder: " + tessData);
 
-            List<OcrVariant> variants = BuildOcrVariants(imagePath);
+            List<OcrVariant> variants = BuildOcrVariants(imagePath, out bool[] lineStartsWithMinus);
             string debugPath = Path.Combine(Path.GetTempPath(), "gauss_ocr_debug.txt");
             string lastImagePath = Path.Combine(Path.GetTempPath(), "gauss_ocr_last.png");
             var debug = new StringBuilder();
@@ -769,7 +834,7 @@ namespace GaussSolver
 
                                 string text;
                                 using (Page page = engine.Process(pix))
-                                    text = SanitizeOcrText(page.GetText());
+                                    text = SanitizeOcrText(page.GetText(), lineStartsWithMinus);
 
                                 long score = ScoreOcrText(text);
 
@@ -871,7 +936,7 @@ namespace GaussSolver
             }
         }
 
-        public static string SanitizeOcrText(string raw)
+        public static string SanitizeOcrText(string raw, bool[] lineStartsWithMinus = null)
         {
             if (string.IsNullOrWhiteSpace(raw))
                 return "";
@@ -887,9 +952,9 @@ namespace GaussSolver
             string[] lines = cleaned.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
             List<string> validLines = new List<string>();
 
-            foreach (string line in lines)
+            for (int i = 0; i < lines.Length; i++)
             {
-                string trimmed = line.Trim();
+                string trimmed = lines[i].Trim();
                 if (string.IsNullOrWhiteSpace(trimmed))
                     continue;
 
@@ -900,6 +965,11 @@ namespace GaussSolver
                     trimmed = Regex.Replace(trimmed, @"[\?:]+", "=");
                 }
 
+                // 1) تصليح أخطاء الكسور الشائعة في Tesseract مثل "w/d" أو "w4d" أو "w/A" -> "w/4" و "2z/3" -> "z/3"
+                trimmed = Regex.Replace(trimmed, @"\b([a-zA-Z])(?:/[dDaA]|4[dDaA]?)\b", "$1/4");
+                trimmed = Regex.Replace(trimmed, @"\b2[zZ]/(\d+)\b", "z/$1");
+
+                // 2) تصليح أخطاء قراءة الحروف المكررة أو الملونة
                 trimmed = Regex.Replace(trimmed, @"(\d)7[zZ]\b", "$1z");
                 trimmed = Regex.Replace(trimmed, @"([a-zA-Z])[247]\b", "$1");
                 trimmed = Regex.Replace(trimmed, @"[xX]{2,}", "x");
@@ -926,7 +996,17 @@ namespace GaussSolver
                         "$1 = $2");
                 }
 
-                validLines.Add(trimmed.Trim());
+                // 3) استرجاع إشارة السالب '-' في أول السطر لو الفحص الهندسي للصورة لقاها موجودة و Tesseract بلعها
+                trimmed = trimmed.Trim();
+                if (lineStartsWithMinus != null &&
+                    validLines.Count < lineStartsWithMinus.Length &&
+                    lineStartsWithMinus[validLines.Count] &&
+                    !trimmed.StartsWith("-"))
+                {
+                    trimmed = "-" + trimmed;
+                }
+
+                validLines.Add(trimmed);
             }
 
             return string.Join(Environment.NewLine, validLines);
