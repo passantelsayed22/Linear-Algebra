@@ -281,7 +281,6 @@ namespace GaussSolver
             var coefficients = new Dictionary<string, Fraction>(
                 StringComparer.OrdinalIgnoreCase);
 
-            // يدعم: 2x, 3/4 x, x/2, 3x/4, -y/3
             string pattern =
                 @"(?<sign>[+-]?)\s*(?<coef>(?:\d+\s*/\s*\d+|\d+(?:\.\d+)?|\.\d+)?)\s*\*?\s*(?<var>[a-zA-Z]\w*)(?:\s*/\s*(?<denom>\d+(?:\.\d+)?|\.\d+))?";
 
@@ -421,10 +420,6 @@ namespace GaussSolver
             }
         }
 
-        // =====================================================================
-        //  Image OCR with Tesseract (offline, supports NuGet & tesseract.exe)
-        // =====================================================================
-
         private static List<OcrVariant> BuildOcrVariants(string originalPath)
         {
             var variants = new List<OcrVariant>();
@@ -543,7 +538,7 @@ namespace GaussSolver
                     string tempPath = Path.Combine(
                         Path.GetTempPath(),
                         $"gauss_tess_{Guid.NewGuid():N}.png");
-                    scaled.Save(tempPath, ImageFormat.Png);
+                    scaled.Save(tempPath, System.Drawing.Imaging.ImageFormat.Png);
                     return tempPath;
                 }
             }
@@ -761,8 +756,7 @@ namespace GaussSolver
                 .Replace('\u2013', '-')
                 .Replace('\u2014', '-')
                 .Replace('~', '-')
-                .Replace('×', '*')
-                .Replace('÷', '/');
+                .Replace('×', '*');
 
             string[] lines = cleaned.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
             List<string> validLines = new List<string>();
@@ -780,7 +774,6 @@ namespace GaussSolver
                     trimmed = Regex.Replace(trimmed, @"[\?:]+", "=");
                 }
 
-                // تصليح أخطاء Tesseract الشائعة في المعادلات الرياضية (مثل قراءة z كـ z2 أو we= كـ w =)
                 trimmed = Regex.Replace(trimmed, @"\b2?[zZ]2?\b", "z");
                 trimmed = Regex.Replace(trimmed, @"\b[wW]{2}\b", "w");
                 trimmed = Regex.Replace(trimmed, @"\b([a-zA-Z])e\s*=", "$1 =");
